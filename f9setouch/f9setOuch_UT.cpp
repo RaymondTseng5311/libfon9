@@ -16,6 +16,7 @@
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <algorithm>
 #include <vector>
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -335,6 +336,15 @@ struct TestRptHandler : public ExgOuchRptHandler {
       std::lock_guard<std::mutex> lk{this->Mutex_};
       return idx < this->Rpts_.size() ? this->Rpts_[idx] : std::string{};
    }
+   /// 傳回複本, 避免取用暫時 std::string 的內部指標.
+   template <class T>
+   T RptAs(size_t idx) {
+      const std::string rpt = this->Rpt(idx);
+      T                 res;
+      memset(&res, 0, sizeof(res));
+      memcpy(&res, rpt.data(), std::min(rpt.size(), sizeof(res)));
+      return res;
+   }
    uint64_t SeqNo(size_t idx) {
       std::lock_guard<std::mutex> lk{this->Mutex_};
       return idx < this->SeqNos_.size() ? this->SeqNos_[idx] : 0;
@@ -530,8 +540,8 @@ int main(int argc, char* argv[]) {
    }
    fon9_CheckTestResult("New.Accepted", WaitFor([&]() { return rpts->Count() == 1; })
                         && rpts->SeqNo(0) == 1 && rpts->Rpt(0)[0] == 'A');
-   const uint64_t orderId = reinterpret_cast<const OuchOrderAccepted*>(rpts->Rpt(0).data())->OrderId_.Get();
-   fon9_CheckTestResult("New.AcceptedFields", ToStrView(reinterpret_cast<const OuchOrderAccepted*>(rpts->Rpt(0).data())->OrderToken_)
+   const uint64_t orderId = rpts->RptAs<OuchOrderAccepted>(0).OrderId_.Get();
+   fon9_CheckTestResult("New.AcceptedFields", ToStrView(rpts->RptAs<OuchOrderAccepted>(0).OrderToken_)
                         == fon9::StrView{&token1} && orderId == 1000);
 
    std::cout << "--- Replace ---" << std::endl;
@@ -544,7 +554,7 @@ int main(int argc, char* argv[]) {
    {
       const std::string msg = server.Inbound(1);
       const auto&       chg = *reinterpret_cast<const OuchReplaceOrder*>(msg.data());
-      const auto&       rpt = *reinterpret_cast<const OuchOrderReplaced*>(rpts->Rpt(1).data());
+      const auto        rpt = rpts->RptAs<OuchOrderReplaced>(1);
       std::cout << ToText(msg, false) << std::endl;
       fon9_CheckTestResult("Replace.Fields", msg.size() == sizeof(OuchReplaceOrder) && chg.MsgType_ == 'U'
                            && ToStrView(chg.ExistingOrderToken_) == fon9::StrView{&token1}
@@ -571,7 +581,7 @@ int main(int argc, char* argv[]) {
    }
    fon9_CheckTestResult("Executed", WaitFor([&]() { return rpts->Count() == 3; })
                         && rpts->SeqNo(2) == 3 && rpts->Rpt(2)[0] == 'E'
-                        && reinterpret_cast<const OuchOrderExecuted*>(rpts->Rpt(2).data())->TradedQuantity_.Get() == 20);
+                        && rpts->RptAs<OuchOrderExecuted>(2).TradedQuantity_.Get() == 20);
 
    std::cout << "--- Cancel ---" << std::endl;
    // 刪單必須使用新單的 Token.
@@ -579,14 +589,14 @@ int main(int argc, char* argv[]) {
    fon9_CheckTestResult("Cancel.Sent", res == "token=" + token1 + "|result=Sent");
    fon9_CheckTestResult("Cancel.Cancelled", WaitFor([&]() { return rpts->Count() == 4; })
                         && rpts->SeqNo(3) == 4 && rpts->Rpt(3)[0] == 'C'
-                        && reinterpret_cast<const OuchOrderCancelled*>(rpts->Rpt(3).data())->Reason_.Get() == 1
+                        && rpts->RptAs<OuchOrderCancelled>(3).Reason_.Get() == 1
                         && server.Inbound(2) == std::string{"X"} + token1);
 
    std::cout << "--- Rejected ---" << std::endl;
    res = seed->SendRequest(*MakeOuchRequest("new 1001 S 1000000 1", err));
    fon9_CheckTestResult("Rejected", WaitFor([&]() { return rpts->Count() == 5; })
                         && rpts->SeqNo(4) == 5 && rpts->Rpt(4)[0] == 'J'
-                        && reinterpret_cast<const OuchOrderRejected*>(rpts->Rpt(4).data())->RejectCode_.Get() == -110023);
+                        && rpts->RptAs<OuchOrderRejected>(4).RejectCode_.Get() == -110023);
 
    std::cout << "--- Request errors ---" << std::endl;
    {
