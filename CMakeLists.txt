@@ -46,3 +46,4 @@ endif()
 
 add_subdirectory(f9tws)
 add_subdirectory(f9twf)
+add_subdirectory(f9setouch)
