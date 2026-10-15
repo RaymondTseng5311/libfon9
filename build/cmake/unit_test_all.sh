@@ -91,6 +91,12 @@ TWFOUT_DIR=${TWFOUT_DIR:-${BUILD_DIR}/${BUILD_TYPE}/f9twf}
 $TWFOUT_DIR/f9twf_SymbId_UT
 
 # ---------------------------------
+# f9set
+SETOUT_DIR=${SETOUT_DIR:-${BUILD_DIR}/${BUILD_TYPE}/f9set}
+$SETOUT_DIR/f9setExgMdItch_UT
+$SETOUT_DIR/f9setMdSys_UT
+
+# ---------------------------------
 { set +x; } 2>/dev/null
 echo '#####################################################'
 echo '#                 All tests passed!                 #'
