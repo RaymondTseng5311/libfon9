@@ -1,5 +1,7 @@
 ﻿// \file f9set/ExgMdBookBuilder.cpp
 #include "f9set/ExgMdBookBuilder.hpp"
+#include "fon9/StrTo.hpp"
+#include "fon9/StrTools.hpp"
 
 namespace f9set {
 
@@ -18,6 +20,19 @@ void ExgMdBookBuilder::OnPhaseChanged(ExgMdOrderBook&, SetTradingPhase) {}
 void ExgMdBookBuilder::OnEquilibriumChanged(ExgMdOrderBook&) {}
 void ExgMdBookBuilder::OnStartOfMessages() {}
 void ExgMdBookBuilder::OnEndOfMessages() {}
+void ExgMdBookBuilder::OnSnapshotDone() {}
+
+void ExgMdBookBuilder::BeginSnapshot() {
+   base::BeginSnapshot();
+   for (auto& book : this->Books_)
+      book.second->ClearOrders();
+}
+void ExgMdBookBuilder::OnItchEndOfSnapshot(const ItchEndOfSnapshot& msg) {
+   fon9::StrView seqstr = ToStrView(msg.SeqNo_);
+   fon9::StrTrim(&seqstr);
+   this->EndSnapshot(fon9::StrTo(seqstr, uint64_t{0}));
+   this->OnSnapshotDone();
+}
 
 //--------------------------------------------------------------------------//
 void ExgMdBookBuilder::OnItchSystemEvent(const ItchSystemEvent& msg) {

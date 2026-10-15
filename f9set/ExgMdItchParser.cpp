@@ -70,6 +70,7 @@ void ExgMdItchParser::ParseItchMessage(uint64_t seqNo, const void* msg, unsigned
    case_ITCH_MSG(OrderDelete,            ItchOrderDelete);
    case_ITCH_MSG(Trade,                  ItchTrade);
    case_ITCH_MSG(EquilibriumPriceUpdate, ItchEquilibriumPriceUpdate);
+   case_ITCH_MSG(EndOfSnapshot,          ItchEndOfSnapshot);
    default:
    case ItchMsgType::CombinationOrderBookDirectory: // 組合單目前不處理.
       ++this->UnknownMsgCount_;
@@ -91,6 +92,7 @@ void ExgMdItchParser::OnItchOrderReplace(const ItchOrderReplace&) {}
 void ExgMdItchParser::OnItchOrderDelete(const ItchOrderDelete&) {}
 void ExgMdItchParser::OnItchTrade(const ItchTrade&) {}
 void ExgMdItchParser::OnItchEquilibriumPriceUpdate(const ItchEquilibriumPriceUpdate&) {}
+void ExgMdItchParser::OnItchEndOfSnapshot(const ItchEndOfSnapshot&) {}
 void ExgMdItchParser::OnItchUnknown(uint64_t, const void*, unsigned) {}
 
 } // namespaces

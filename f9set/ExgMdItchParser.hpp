@@ -53,6 +53,7 @@ protected:
    virtual void OnItchOrderDelete(const ItchOrderDelete& msg);
    virtual void OnItchTrade(const ItchTrade& msg);
    virtual void OnItchEquilibriumPriceUpdate(const ItchEquilibriumPriceUpdate& msg);
+   virtual void OnItchEndOfSnapshot(const ItchEndOfSnapshot& msg);
    virtual void OnItchUnknown(uint64_t seqNo, const void* msg, unsigned msgsz);
 
    /// 目前處理中的訊息序號.

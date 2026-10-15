@@ -8,149 +8,13 @@
 //
 #define _CRT_SECURE_NO_WARNINGS
 #include "f9set/ExgMdBookBuilder.hpp"
+#include "f9set/ExgMdSoupBinTcp.hpp"
+#include "f9set/ExgMdRtsBuilder.hpp"
+#include "f9set/ExgMdTestPk.hpp"
+#include "fon9/buffer/DcQueueList.hpp"
 #include "fon9/TestTools.hpp"
 #include <string>
 #include <vector>
-
-//--------------------------------------------------------------------------//
-/// 產生 MoldUDP64 Downstream Packet.
-class MoldPkBuilder {
-   std::string Buf_;
-   uint16_t    Count_{0};
-   void* Alloc(size_t sz) {
-      char lenbuf[2];
-      fon9::PutBigEndian(lenbuf, static_cast<uint16_t>(sz));
-      this->Buf_.append(lenbuf, 2);
-      this->Buf_.append(sz, '\0');
-      ++this->Count_;
-      return &*(this->Buf_.end() - static_cast<std::ptrdiff_t>(sz));
-   }
-public:
-   MoldPkBuilder(const char* session, uint64_t seqNo, uint16_t count = 0) {
-      f9set::MoldUdp64Head head;
-      memset(&head, 0, sizeof(head));
-      head.Session_.AssignFrom(fon9::StrView_cstr(session));
-      head.SeqNo_.Put(seqNo);
-      head.MsgCount_.Put(count);
-      this->Buf_.assign(reinterpret_cast<const char*>(&head), sizeof(head));
-   }
-   /// 加入一個訊息, 傳回的參考只能在下次 Add() 之前使用.
-   template <class MsgT>
-   MsgT& Add(char msgType, uint32_t nanos = 0) {
-      MsgT* msg = static_cast<MsgT*>(this->Alloc(sizeof(MsgT)));
-      memset(static_cast<void*>(msg), 0, sizeof(*msg));
-      reinterpret_cast<char*>(msg)[0] = msgType;
-      if (sizeof(MsgT) >= sizeof(f9set::ItchMsgHead))
-         reinterpret_cast<f9set::ItchMsgHead*>(msg)->Nanoseconds_.Put(nanos);
-      return *msg;
-   }
-   void AddRaw(const void* msg, size_t sz) {
-      memcpy(this->Alloc(sz), msg, sz);
-   }
-   const std::string& Finish() {
-      reinterpret_cast<f9set::MoldUdp64Head*>(&*this->Buf_.begin())->MsgCount_.Put(this->Count_);
-      return this->Buf_;
-   }
-   /// Heartbeat 或 End of Session: 不要呼叫 Finish().
-   const std::string& Raw() const {
-      return this->Buf_;
-   }
-
-   // ----- 常用訊息.
-   void Seconds(uint32_t secs) {
-      this->Add<f9set::ItchSeconds>('T').Seconds_.Put(secs);
-   }
-   void SystemEvent(char code) {
-      this->Add<f9set::ItchSystemEvent>('S').EventCode_ = code;
-   }
-   void Directory(uint32_t id, const char* symbol, uint16_t decimals, uint32_t roundLot) {
-      auto& msg = this->Add<f9set::ItchOrderBookDirectory>('R');
-      msg.OrderBookId_.Put(id);
-      msg.Symbol_.AssignFrom(fon9::StrView_cstr(symbol));
-      msg.LongName_.AssignFrom(fon9::StrView_cstr(symbol));
-      msg.Isin_.AssignFrom(fon9::StrView{"TH0000000000"});
-      msg.FinancialProduct_.Put(5);
-      msg.TradingCurrency_.AssignFrom(fon9::StrView{"THB"});
-      msg.PriceDecimals_.Put(decimals);
-      msg.RoundLotSize_.Put(roundLot);
-   }
-   void State(uint32_t id, const char* stateName, uint32_t nanos = 0) {
-      auto& msg = this->Add<f9set::ItchOrderBookState>('O', nanos);
-      msg.OrderBookId_.Put(id);
-      msg.StateName_.AssignFrom(fon9::StrView_cstr(stateName));
-   }
-   void AddOrder(uint32_t id, char side, uint64_t ordId, f9set::ItchPrice pri, uint64_t qty) {
-      auto& msg = this->Add<f9set::ItchAddOrder>('A');
-      msg.OrderBookId_.Put(id);
-      msg.Side_ = side;
-      msg.OrderId_.Put(ordId);
-      msg.OrderBookPosition_.Put(1);
-      msg.Quantity_.Put(qty);
-      msg.Price_.Put(pri);
-      msg.LotType_.Put(2);
-   }
-   void AddOrderMpid(uint32_t id, char side, uint64_t ordId, f9set::ItchPrice pri, uint64_t qty, const char* mpid) {
-      auto& msg = this->Add<f9set::ItchAddOrderMpid>('F');
-      msg.OrderBookId_.Put(id);
-      msg.Side_ = side;
-      msg.OrderId_.Put(ordId);
-      msg.Quantity_.Put(qty);
-      msg.Price_.Put(pri);
-      msg.ParticipantId_.AssignFrom(fon9::StrView_cstr(mpid));
-   }
-   void Executed(uint32_t id, char side, uint64_t ordId, uint64_t qty, uint64_t matchNo, uint32_t nanos = 0) {
-      auto& msg = this->Add<f9set::ItchOrderExecuted>('E', nanos);
-      msg.OrderBookId_.Put(id);
-      msg.Side_ = side;
-      msg.OrderId_.Put(ordId);
-      msg.ExecutedQuantity_.Put(qty);
-      msg.MatchId_.MatchNo_.Put(matchNo);
-   }
-   void ExecutedWithPrice(uint32_t id, char side, uint64_t ordId, uint64_t qty, uint64_t matchNo,
-                          f9set::ItchPrice pri, char cross, char printable) {
-      auto& msg = this->Add<f9set::ItchOrderExecutedWithPrice>('C');
-      msg.OrderBookId_.Put(id);
-      msg.Side_ = side;
-      msg.OrderId_.Put(ordId);
-      msg.ExecutedQuantity_.Put(qty);
-      msg.MatchId_.MatchNo_.Put(matchNo);
-      msg.TradePrice_.Put(pri);
-      msg.OccurredAtCross_ = cross;
-      msg.Printable_ = printable;
-   }
-   void Replace(uint32_t id, char side, uint64_t ordId, f9set::ItchPrice pri, uint64_t qty) {
-      auto& msg = this->Add<f9set::ItchOrderReplace>('U');
-      msg.OrderBookId_.Put(id);
-      msg.Side_ = side;
-      msg.OrderId_.Put(ordId);
-      msg.NewOrderBookPosition_.Put(1);
-      msg.Quantity_.Put(qty);
-      msg.Price_.Put(pri);
-   }
-   void Delete(uint32_t id, char side, uint64_t ordId) {
-      auto& msg = this->Add<f9set::ItchOrderDelete>('D');
-      msg.OrderBookId_.Put(id);
-      msg.Side_ = side;
-      msg.OrderId_.Put(ordId);
-   }
-   void Trade(uint32_t id, uint64_t qty, f9set::ItchPrice pri, uint64_t matchNo, char printable, char cross) {
-      auto& msg = this->Add<f9set::ItchTrade>('P');
-      msg.OrderBookId_.Put(id);
-      msg.Side_ = ' ';
-      msg.Quantity_.Put(qty);
-      msg.TradePrice_.Put(pri);
-      msg.MatchId_.MatchNo_.Put(matchNo);
-      msg.Printable_ = printable;
-      msg.OccurredAtCross_ = cross;
-   }
-   void Equilibrium(uint32_t id, f9set::ItchPrice pri, uint64_t bidQty, uint64_t askQty) {
-      auto& msg = this->Add<f9set::ItchEquilibriumPriceUpdate>('Z');
-      msg.OrderBookId_.Put(id);
-      msg.EquilibriumPrice_.Put(pri);
-      msg.BidQuantity_.Put(bidQty);
-      msg.AskQuantity_.Put(askQty);
-   }
-};
 
 //--------------------------------------------------------------------------//
 struct TestBuilder : public f9set::ExgMdBookBuilder {
@@ -166,6 +30,11 @@ struct TestBuilder : public f9set::ExgMdBookBuilder {
    uint64_t SessionChangedCount_{0};
    uint64_t LastGapFrom_{0};
    uint64_t LastGapTo_{0};
+   uint64_t LastLostFrom_{0};
+   uint64_t LastLostTo_{0};
+   uint64_t SnapshotDoneCount_{0};
+   bool     CanSendRequest_{true};
+   std::vector<f9set::MoldUdp64Request> Requests_;
 
    f9set::MoldUdp64Result Feed(const std::string& pk) {
       this->Packets_.push_back(pk);
@@ -186,6 +55,19 @@ struct TestBuilder : public f9set::ExgMdBookBuilder {
    void OnMoldGap(uint64_t expectedSeqNo, uint64_t receivedSeqNo) override {
       this->LastGapFrom_ = expectedSeqNo;
       this->LastGapTo_ = receivedSeqNo;
+   }
+   void OnMoldLost(uint64_t fromSeqNo, uint64_t toSeqNo) override {
+      this->LastLostFrom_ = fromSeqNo;
+      this->LastLostTo_ = toSeqNo;
+   }
+   bool OnMoldSendRequest(const f9set::MoldUdp64Request& req) override {
+      if (!this->CanSendRequest_)
+         return false;
+      this->Requests_.push_back(req);
+      return true;
+   }
+   void OnSnapshotDone() override {
+      ++this->SnapshotDoneCount_;
    }
    void OnMoldEndOfSession() override {
       ++this->EndOfSessionCount_;
@@ -210,7 +92,7 @@ static const uint32_t kDELTA = 1002;
 void TestMoldUdp64(TestBuilder& tb) {
    std::cout << "--- MoldUDP64 ---" << std::endl;
    MoldPkBuilder pk1{kSession, 1};
-   pk1.Seconds(1792040400); // 2026-10-15 09:00:00 (UTC+7).
+   pk1.Seconds(1792029600); // 2026-10-15 09:00:00 (UTC+7).
    pk1.SystemEvent('O');
    pk1.Directory(kPTT, "PTT", 2, 100);
    pk1.Directory(kDELTA, "DELTA", 2, 100);
@@ -219,7 +101,7 @@ void TestMoldUdp64(TestBuilder& tb) {
    fon9_CheckTestResult("pk1.Ok", tb.Feed(p1) == f9set::MoldUdp64Result::Ok);
    fon9_CheckTestResult("pk1.NextSeqNo=6", tb.GetNextSeqNo() == 6);
    fon9_CheckTestResult("pk1.MsgCount=5", tb.MsgCount_ == 5);
-   fon9_CheckTestResult("Seconds", tb.GetItchSeconds() == 1792040400);
+   fon9_CheckTestResult("Seconds", tb.GetItchSeconds() == 1792029600);
    fon9_CheckTestResult("StartOfMessages", tb.StartOfMessagesCount_ == 1);
    fon9_CheckTestResult("Directory.count", tb.GetOrderBookCount() == 2);
    const f9set::ExgMdOrderBook* ptt = tb.GetOrderBook(kPTT);
@@ -260,7 +142,7 @@ void TestMoldUdp64(TestBuilder& tb) {
 
    // 封包有誤: Message Block 長度超過封包.
    MoldPkBuilder bad{kSession, 12};
-   bad.Seconds(1792040401);
+   bad.Seconds(1792029601);
    std::string badpk = bad.Finish();
    badpk.resize(badpk.size() - 1);
    fon9_CheckTestResult("BadPacket.Truncated", tb.Feed(badpk) == f9set::MoldUdp64Result::BadPacket);
@@ -325,7 +207,7 @@ void TestOrderBook(TestBuilder& tb) {
    fon9_CheckTestResult("Deals", tb.Deals_.size() == 2 && ptt.DealCount_ == 2 && ptt.TotalQty_ == 100);
    fon9_CheckTestResult("LastDeal", ptt.LastDeal_.Price_ == 3425 && ptt.LastDeal_.Qty_ == 40
                         && ptt.LastDeal_.MatchNo_ == 9002 && !ptt.LastDeal_.IsAuction_);
-   fon9_CheckTestResult("LastDeal.Time", ptt.LastDeal_.Time_.ToEpochSeconds() == 1792040400);
+   fon9_CheckTestResult("LastDeal.Time", ptt.LastDeal_.Time_.ToEpochSeconds() == 1792029600);
    fon9_CheckTestResult("OrderNotFound", tb.OrderNotFoundCount_ == 1);
    ptt.GetBS(bs);
    fon9_CheckTestResult("Exec.BS.Sells", IsPQ(bs.Sells_[0], 3425, 50) && IsPQ(bs.Sells_[1], 3450, 200));
@@ -377,7 +259,7 @@ void TestSession(TestBuilder& tb) {
 
    // 換日: 新的 Session 從序號 1 開始.
    MoldPkBuilder pk{"0000000002", 1};
-   pk.Seconds(1792126800);
+   pk.Seconds(1792116000);
    pk.SystemEvent('O');
    fon9_CheckTestResult("NewSession", tb.Feed(pk.Finish()) == f9set::MoldUdp64Result::Ok
                         && tb.SessionChangedCount_ == 1 && !tb.IsEndOfSession() && tb.GetNextSeqNo() == 3);
@@ -388,6 +270,330 @@ void TestSession(TestBuilder& tb) {
                         && ptt.Symbol_ == "PTT");
    fon9_CheckTestResult("PhaseMap", f9set::ItchStateNameToPhase(fon9::StrView{"INTERMISSION        "})
                         == f9set::SetTradingPhase::Intermission);
+}
+
+//--------------------------------------------------------------------------//
+static bool IsRequest(const f9set::MoldUdp64Request& req, uint64_t seqNo, uint16_t count) {
+   return req.SeqNo_.Get() == seqNo && req.MsgCount_.Get() == count && req.Session_ == fon9::StrView{kSession};
+}
+void TestRecover() {
+   std::cout << "--- Recover ---" << std::endl;
+   TestBuilder tb;
+   tb.SetRecoverEnabled(true);
+   MoldPkBuilder pk1{kSession, 1};
+   pk1.Seconds(1792029600);
+   pk1.Directory(kPTT, "PTT", 2, 100);
+   fon9_CheckTestResult("pk1", tb.Feed(pk1.Finish()) == f9set::MoldUdp64Result::Ok && tb.GetNextSeqNo() == 3);
+
+   // 缺 [3,5): 5,6 先暫存.
+   MoldPkBuilder pk5{kSession, 5};
+   pk5.AddOrder(kPTT, 'B', 5, 3400, 500);
+   pk5.AddOrder(kPTT, 'B', 6, 3400, 600);
+   fon9_CheckTestResult("Gap.Pending", tb.Feed(pk5.Finish()) == f9set::MoldUdp64Result::Pending
+                        && tb.GetPendingCount() == 2 && tb.HasGap() && tb.GetGapEndSeqNo() == 5
+                        && tb.LastGapFrom_ == 3 && tb.LastGapTo_ == 5 && tb.GapCount_ == 0
+                        && tb.GetNextSeqNo() == 3);
+   const f9set::ExgMdOrderBook& ptt = *tb.GetOrderBook(kPTT);
+   fon9_CheckTestResult("Gap.NotApplied", ptt.GetOrderCount(f9set::ExgSide::Buy) == 0);
+
+   const fon9::TimeStamp      now = fon9::UtcNow();
+   const f9set::MoldUdp64RecoverArgs& args = tb.RecoverArgs_;
+   // GapWait 之內不送出(等另一路補上).
+   fon9_CheckTestResult("Recover.GapWait", tb.CheckRecover(now - fon9::TimeInterval_Second(1)) > fon9::TimeInterval{}
+                        && tb.Requests_.empty());
+   fon9_CheckTestResult("Recover.Request", tb.CheckRecover(now + args.GapWait_) == args.RetryInterval_
+                        && tb.Requests_.size() == 1 && IsRequest(tb.Requests_[0], 3, 2) && tb.RequestCount_ == 1);
+   fon9_CheckTestResult("Recover.WaitReply", tb.CheckRecover(now + args.GapWait_ + fon9::TimeInterval_Millisecond(100))
+                        == args.RetryInterval_ - fon9::TimeInterval_Millisecond(100)
+                        && tb.Requests_.size() == 1);
+
+   // 回補封包: 補上 [3,5), 接著處理暫存的 5,6.
+   MoldPkBuilder pk3{kSession, 3};
+   pk3.AddOrder(kPTT, 'B', 3, 3375, 300);
+   pk3.AddOrder(kPTT, 'B', 4, 3375, 400);
+   fon9_CheckTestResult("Recover.Filled", tb.Feed(pk3.Finish()) == f9set::MoldUdp64Result::Ok
+                        && tb.GetNextSeqNo() == 7 && !tb.HasGap() && tb.GetPendingCount() == 0
+                        && ptt.GetOrderCount(f9set::ExgSide::Buy) == 4 && tb.GapCount_ == 0);
+   fon9_CheckTestResult("Recover.NoGap", tb.CheckRecover(now) == fon9::TimeInterval{});
+   // 再收到一次暫存過的封包: 重複.
+   fon9_CheckTestResult("Recover.Dup", tb.Feed(pk5.Finish()) == f9set::MoldUdp64Result::Duplicate);
+
+   // 另一路(A/B) 在送出回補要求之前補上.
+   MoldPkBuilder pk8{kSession, 8};
+   pk8.Delete(kPTT, 'B', 3);
+   fon9_CheckTestResult("AB.Gap", tb.Feed(pk8.Finish()) == f9set::MoldUdp64Result::Pending && tb.HasGap());
+   MoldPkBuilder pk7{kSession, 7};
+   pk7.Delete(kPTT, 'B', 4);
+   pk7.Delete(kPTT, 'B', 3);
+   fon9_CheckTestResult("AB.Filled", tb.Feed(pk7.Finish()) == f9set::MoldUdp64Result::Ok
+                        && tb.GetNextSeqNo() == 9 && tb.DupMsgCount_ == 3 && tb.Requests_.size() == 1
+                        && ptt.GetOrderCount(f9set::ExgSide::Buy) == 2 && tb.OrderNotFoundCount_ == 0);
+
+   // 回補失敗: 重送 MaxRetry 次之後放棄.
+   MoldPkBuilder pk11{kSession, 11};
+   pk11.AddOrder(kPTT, 'S', 11, 3500, 100);
+   fon9_CheckTestResult("Retry.Gap", tb.Feed(pk11.Finish()) == f9set::MoldUdp64Result::Pending);
+   fon9::TimeStamp t = fon9::UtcNow() + args.GapWait_;
+   tb.Requests_.clear();
+   for (unsigned L = 0; L < args.MaxRetry_; ++L) {
+      tb.CheckRecover(t);
+      t += args.RetryInterval_;
+   }
+   fon9_CheckTestResult("Retry.Requests", tb.Requests_.size() == args.MaxRetry_
+                        && IsRequest(tb.Requests_.back(), 9, 2) && tb.HasGap());
+   fon9_CheckTestResult("Retry.GiveUp", tb.CheckRecover(t) == fon9::TimeInterval{}
+                        && tb.Requests_.size() == args.MaxRetry_
+                        && tb.GapCount_ == 1 && tb.GapMsgCount_ == 2
+                        && tb.LastLostFrom_ == 9 && tb.LastLostTo_ == 11
+                        && tb.GetNextSeqNo() == 12 && ptt.GetOrderCount(f9set::ExgSide::Sell) == 1);
+
+   // 無法送出回補要求: 直接放棄.
+   tb.CanSendRequest_ = false;
+   MoldPkBuilder hb{kSession, 15};
+   fon9_CheckTestResult("SendFail.Gap", tb.Feed(hb.Raw()) == f9set::MoldUdp64Result::Heartbeat
+                        && tb.HasGap() && tb.GetGapEndSeqNo() == 15);
+   fon9_CheckTestResult("SendFail.Skip", tb.CheckRecover(fon9::UtcNow() + args.GapWait_) == fon9::TimeInterval{}
+                        && tb.GapCount_ == 2 && tb.GetNextSeqNo() == 15 && !tb.HasGap());
+
+   // 一次最多要求 MaxRequestCount_ 筆.
+   tb.CanSendRequest_ = true;
+   tb.Requests_.clear();
+   MoldPkBuilder hb2{kSession, 15 + 5000};
+   tb.Feed(hb2.Raw());
+   tb.CheckRecover(fon9::UtcNow() + args.GapWait_);
+   fon9_CheckTestResult("MaxRequestCount", tb.Requests_.size() == 1
+                        && IsRequest(tb.Requests_[0], 15, args.MaxRequestCount_));
+   tb.SkipGap();
+   fon9_CheckTestResult("SkipGap", !tb.HasGap() && tb.GetNextSeqNo() == 15 + 5000 && tb.GapCount_ == 3);
+}
+
+//--------------------------------------------------------------------------//
+struct TestGlimpse : public f9set::SoupBinTcpClient {
+   fon9_NON_COPY_NON_MOVE(TestGlimpse);
+   f9set::ExgMdItchParser& Parser_;
+   unsigned LoginAccepted_{0};
+   char     RejectReason_{0};
+   unsigned HbCount_{0};
+   unsigned EndOfSession_{0};
+   unsigned Unknown_{0};
+   std::string Debug_;
+   TestGlimpse(f9set::ExgMdItchParser& parser) : Parser_(parser) {
+   }
+   void OnSoupLoginAccepted() override { ++this->LoginAccepted_; }
+   void OnSoupLoginRejected(char reason) override { this->RejectReason_ = reason; }
+   void OnSoupServerHeartbeat() override { ++this->HbCount_; }
+   void OnSoupEndOfSession() override { ++this->EndOfSession_; }
+   void OnSoupDebug(fon9::StrView text) override { this->Debug_ = text.ToString(); }
+   void OnSoupUnknownPacket(char, const void*, unsigned) override { ++this->Unknown_; }
+   void OnSoupSequencedData(uint64_t seqNo, const void* msg, unsigned msgsz) override {
+      this->Parser_.ParseItchMessage(seqNo, msg, msgsz);
+   }
+};
+void TestSoupBinTcp() {
+   std::cout << "--- SoupBinTCP ---" << std::endl;
+   const std::string login = f9set::SoupBinTcpClient::MakeLoginRequest("user01", "pass", "", 1);
+   fon9_CheckTestResult("LoginRequest", login.size() == 3 + 46 && login[0] == 0 && login[1] == 47 && login[2] == 'L'
+                        && login.compare(3, 6, "user01") == 0
+                        && login.compare(9, 10, "pass      ") == 0
+                        && login.compare(19, 10, "          ") == 0
+                        && login.compare(29, 20, "                   1") == 0);
+   const std::string hb = f9set::SoupBinTcpClient::MakeClientHeartbeat();
+   fon9_CheckTestResult("ClientHeartbeat", hb == std::string("\0\1R", 3));
+   fon9_CheckTestResult("Logout", f9set::SoupBinTcpClient::MakeLogoutRequest() == std::string("\0\1O", 3));
+
+   TestBuilder tb;
+   TestGlimpse soup{tb};
+   std::string stream = MakeSoup('A', "0000000001                   1", 30);
+   stream.append(MakeSoup('H', nullptr, 0));
+   stream.append(MakeSoup('+', "hello", 5));
+   stream.append(MakeSoup('?', "x", 1));
+   // 分段餵入: 每次 1 byte.
+   size_t pos = 0;
+   for (size_t L = 1; L <= stream.size(); ++L)
+      pos += soup.FeedBytes(stream.data() + pos, L - pos);
+   fon9_CheckTestResult("FeedBytes.Split", pos == stream.size() && soup.LoginAccepted_ == 1 && soup.IsLoggedIn()
+                        && soup.GetSession() == "0000000001" && soup.GetNextSeqNo() == 1
+                        && soup.HbCount_ == 1 && soup.Debug_ == "hello" && soup.Unknown_ == 1);
+
+   fon9::DcQueueList rxbuf;
+   std::string rej = MakeSoup('J', "A", 1);
+   rxbuf.Append(rej.data(), rej.size() - 1);
+   fon9_CheckTestResult("FeedBuffer.Partial", soup.FeedBuffer(rxbuf) && soup.RejectReason_ == 0
+                        && rxbuf.CalcSize() == rej.size() - 1);
+   rxbuf.Append(rej.data() + rej.size() - 1, 1);
+   std::string eos = MakeSoup('Z', nullptr, 0);
+   rxbuf.Append(eos.data(), eos.size());
+   fon9_CheckTestResult("FeedBuffer.Complete", soup.FeedBuffer(rxbuf) && soup.RejectReason_ == 'A'
+                        && soup.EndOfSession_ == 1 && rxbuf.empty());
+   rxbuf.Append("\0\0", 2);
+   fon9_CheckTestResult("FeedBuffer.Bad", !soup.FeedBuffer(rxbuf) && soup.IsBadPacket());
+}
+
+//--------------------------------------------------------------------------//
+void TestSnapshot() {
+   std::cout << "--- GLIMPSE Snapshot ---" << std::endl;
+   TestBuilder tb;
+   TestGlimpse glimpse{tb};
+   // 盤中啟動: 先開始等待快照, 再開始收 multicast.
+   tb.BeginSnapshot();
+   fon9_CheckTestResult("Snapshot.Waiting", tb.IsWaitingSnapshot());
+   MoldPkBuilder rt{kSession, 9};
+   rt.AddOrder(kPTT, 'B', 2, 3375, 300);    // 9: 快照已包含.
+   rt.AddOrder(kPTT, 'S', 200, 3500, 100);  // 10.
+   rt.Delete(kPTT, 'B', 1);                 // 11: 刪除快照裡的委託.
+   fon9_CheckTestResult("Snapshot.Pending", tb.Feed(rt.Finish()) == f9set::MoldUdp64Result::Pending
+                        && tb.GetPendingCount() == 3 && tb.GetOrderBook(kPTT) == nullptr);
+
+   // GLIMPSE: 基本資料, 盤別, 委託簿, 最後是 'G'(下一個即時序號=10).
+   MoldPkBuilder snap{kSession, 1};
+   snap.Seconds(1792033200);
+   snap.Directory(kPTT, "PTT", 2, 100);
+   snap.State(kPTT, "OPEN1");
+   snap.AddOrder(kPTT, 'B', 1, 3400, 500);
+   snap.AddOrder(kPTT, 'B', 2, 3375, 300);
+   snap.AddOrder(kPTT, 'S', 3, 3425, 200);
+   f9set::ItchEndOfSnapshot eos;
+   eos.MsgType_ = 'G';
+   eos.SeqNo_.AssignFrom(fon9::StrView{"                  10"});
+   snap.AddRaw(&eos, sizeof(eos));
+   std::string stream = MakeSoup('A', "0000000001                   1", 30);
+   stream.append(MoldToSoup(snap.Finish()));
+   fon9_CheckTestResult("Glimpse.Feed", glimpse.FeedBytes(stream.data(), stream.size()) == stream.size());
+   const f9set::ExgMdOrderBook* ptt = tb.GetOrderBook(kPTT);
+   fon9_CheckTestResult("Snapshot.Done", ptt && !tb.IsWaitingSnapshot() && tb.SnapshotDoneCount_ == 1
+                        && tb.GetNextSeqNo() == 12 && tb.GetPendingCount() == 0 && tb.DupMsgCount_ == 1
+                        && tb.MsgTypeCount_[static_cast<unsigned char>('G')] == 1);
+   fon9::fmkt::SymbBSData bs;
+   ptt->GetBS(bs);
+   fon9_CheckTestResult("Snapshot.Book", ptt->Phase_ == f9set::SetTradingPhase::Open
+                        && ptt->GetOrderCount(f9set::ExgSide::Buy) == 1 && IsPQ(bs.Buys_[0], 3375, 300)
+                        && IsPQ(bs.Sells_[0], 3425, 200) && IsPQ(bs.Sells_[1], 3500, 100)
+                        && tb.OrderNotFoundCount_ == 0);
+
+   // 快照中斷線: 放棄快照, 從暫存的第一個訊息開始處理.
+   TestBuilder tb2;
+   tb2.BeginSnapshot();
+   MoldPkBuilder rt2{kSession, 100};
+   rt2.Directory(kDELTA, "DELTA", 2, 100);
+   rt2.AddOrder(kDELTA, 'B', 1, 10000, 100);
+   tb2.Feed(rt2.Finish());
+   tb2.AbortSnapshot();
+   fon9_CheckTestResult("Snapshot.Abort", !tb2.IsWaitingSnapshot() && tb2.GetNextSeqNo() == 102
+                        && tb2.GetOrderBook(kDELTA) && tb2.GetOrderBook(kDELTA)->GetOrderCount(f9set::ExgSide::Buy) == 1
+                        && tb2.SnapshotDoneCount_ == 0);
+
+   // 已在接收中, 重新取快照: 清除委託簿, 之後的即時訊息暫存.
+   tb2.BeginSnapshot();
+   fon9_CheckTestResult("Snapshot.Restart", tb2.GetOrderBook(kDELTA)->GetOrderCount(f9set::ExgSide::Buy) == 0
+                        && tb2.GetOrderBook(kDELTA)->Symbol_ == "DELTA");
+   MoldPkBuilder rt3{kSession, 102};
+   rt3.AddOrder(kDELTA, 'B', 2, 10050, 100);
+   tb2.Feed(rt3.Finish());
+   fon9_CheckTestResult("Snapshot.Restart.Pending", tb2.GetPendingCount() == 1 && tb2.GetNextSeqNo() == 102);
+   MoldPkBuilder snap2{kSession, 1};
+   snap2.AddOrder(kDELTA, 'B', 1, 10000, 100);
+   eos.SeqNo_.AssignFrom(fon9::StrView{"102"});
+   snap2.AddRaw(&eos, sizeof(eos));
+   const std::string snap2stream = MoldToSoup(snap2.Finish());
+   TestGlimpse glimpse2{tb2};
+   glimpse2.FeedBytes(snap2stream.data(), snap2stream.size());
+   fon9_CheckTestResult("Snapshot.Restart.Done", tb2.GetNextSeqNo() == 103 && tb2.SnapshotDoneCount_ == 1
+                        && tb2.GetOrderBook(kDELTA)->GetOrderCount(f9set::ExgSide::Buy) == 2);
+}
+
+//--------------------------------------------------------------------------//
+void TestRtsBuilder() {
+   std::cout << "--- MdRts ---" << std::endl;
+   f9set::ExgMdSymbsSP     symbs{new f9set::ExgMdSymbs(std::string{}, true)};
+   f9set::ExgMdRtsBuilder  rb{symbs};
+   MoldPkBuilder pk1{kSession, 1};
+   pk1.Seconds(1792029600); // 2026-10-15 02:00:00 UTC = 09:00:00 (UTC+7).
+   pk1.SystemEvent('O');
+   pk1.Directory(kPTT, "PTT", 2, 100);
+   pk1.State(kPTT, "PRE-OPEN1", 1000);
+   pk1.AddOrder(kPTT, 'B', 1, 3400, 500);
+   pk1.AddOrder(kPTT, 'S', 1, 3425, 200);
+   pk1.AddOrder(kPTT, 'S', 2, 3450, 300);
+   rb.FeedPacket(pk1.Finish().data(), pk1.Finish().size());
+   f9set::ExgMdSymb* symb = rb.GetSymb(kPTT);
+   fon9_CheckTestResult("Symb", symb && ToStrView(symb->SymbId_) == "PTT" && symb->ShUnit_ == 100
+                        && symb->OrderBookId_ == kPTT && symb->PriceDecimals_ == 2
+                        && symb->TradingMarket_ == f9set::f9fmkt_TradingMarket_SET
+                        && ToStrView(symb->NameUTF8_) == "PTT"
+                        && symbs->GetSymb(fon9::StrView{"PTT"}).get() == symb);
+   fon9_CheckTestResult("SessionSt.PreOpen", symb->TradingSessionSt_ == f9fmkt_TradingSessionSt_PreOpen
+                        && symb->TradingSessionId_ == f9fmkt_TradingSessionId_Normal
+                        && fon9::fmkt::IsMatchingMethod_AggregateAuction(symb->TwsFlags_)
+                        && rb.PubSessionStCount_ == 1);
+   // 尚未 FlushBS(): 五檔還沒更新.
+   fon9_CheckTestResult("BS.BeforeFlush", symb->BS_.Data_.Buys_[0].Qty_ == 0 && rb.PubBSCount_ == 0);
+   rb.FlushBS();
+   const fon9::fmkt::SymbBSData& bs = symb->BS_.Data_;
+   fon9_CheckTestResult("BS.Flush", rb.PubBSCount_ == 1
+                        && bs.Buys_[0].Pri_ == Pri2(3400) && bs.Buys_[0].Qty_ == 500
+                        && bs.Sells_[0].Pri_ == Pri2(3425) && bs.Sells_[1].Qty_ == 300
+                        && bs.Buys_[1].Qty_ == 0 && bs.MarketSeq_ == 7
+                        && bs.InfoTime_ == fon9::TimeInterval_Hour(9));
+   rb.FlushBS();
+   fon9_CheckTestResult("BS.NoChange", rb.PubBSCount_ == 1);
+
+   MoldPkBuilder pk2{kSession, rb.GetNextSeqNo()};
+   pk2.State(kPTT, "OPEN1", 2000);
+   pk2.Executed(kPTT, 'S', 1, 50, 9001, 3000000);  // 34.25 x 50 @ 09:00:00.003
+   pk2.Executed(kPTT, 'S', 1, 150, 9002, 3000000); // 34.25 x 150, 同一時間.
+   pk2.AddOrder(kPTT, 'B', 9, 3300, 100);          // 第 6 檔以外不影響五檔? (買方只有 2 檔, 會影響)
+   rb.FeedPacket(pk2.Finish().data(), pk2.Finish().size());
+   rb.FlushBS();
+   const fon9::fmkt::SymbDealData& deal = symb->Deal_.Data_;
+   fon9_CheckTestResult("SessionSt.Open", symb->TradingSessionSt_ == f9fmkt_TradingSessionSt_Open
+                        && fon9::fmkt::IsMatchingMethod_ContinuousMarket(symb->TwsFlags_)
+                        && rb.PubSessionStCount_ == 2);
+   fon9_CheckTestResult("Deal", rb.PubDealCount_ == 2 && deal.Deal_.Pri_ == Pri2(3425) && deal.Deal_.Qty_ == 150
+                        && deal.TotalQty_ == 200 && deal.MarketSeq_ == 10
+                        && deal.DealTime() == fon9::TimeInterval_Hour(9) + fon9::TimeInterval_Millisecond(3)
+                        && !IsEnumContains(deal.Flags_, f9sv_DealFlag_DealTimeChanged)
+                        && !IsEnumContains(deal.Flags_, f9sv_DealFlag_TotalQtyLost));
+   fon9_CheckTestResult("OHL", symb->Open_.Data_.Pri_ == Pri2(3425) && symb->High_.Data_.Pri_ == Pri2(3425)
+                        && symb->Low_.Data_.Pri_ == Pri2(3425));
+   fon9_CheckTestResult("BS.AfterDeal", rb.PubBSCount_ == 2 && bs.Sells_[0].Pri_ == Pri2(3450)
+                        && bs.Buys_[1].Pri_ == Pri2(3300) && bs.MarketSeq_ == 11);
+
+   // 快照期間不發行五檔; 快照完成後, 只發行有變的五檔.
+   rb.BeginSnapshot();
+   MoldPkBuilder snap{kSession, 1};
+   snap.AddOrder(kPTT, 'B', 1, 3400, 500);
+   snap.AddOrder(kPTT, 'B', 9, 3300, 100);
+   snap.AddOrder(kPTT, 'S', 2, 3450, 300);
+   snap.Directory(kDELTA, "DELTA", 2, 100);
+   snap.AddOrder(kDELTA, 'B', 1, 10000, 100);
+   const std::string& snappk = snap.Finish();
+   const fon9::byte*  pmsg = reinterpret_cast<const fon9::byte*>(snappk.data()) + sizeof(f9set::MoldUdp64Head);
+   for (unsigned L = 0; L < 5; ++L) {
+      const uint16_t msgsz = fon9::GetBigEndian<uint16_t>(pmsg);
+      rb.ParseItchMessage(L + 1, pmsg + 2, msgsz);
+      pmsg += 2 + msgsz;
+      rb.FlushBS();
+   }
+   fon9_CheckTestResult("Snapshot.NoPublish", rb.PubBSCount_ == 2 && bs.Sells_[0].Pri_ == Pri2(3450));
+   f9set::ItchEndOfSnapshot eos;
+   eos.MsgType_ = 'G';
+   eos.SeqNo_.AssignFrom(fon9::StrView{"12"});
+   rb.ParseItchMessage(6, &eos, sizeof(eos));
+   f9set::ExgMdSymb* delta = rb.GetSymb(kDELTA);
+   fon9_CheckTestResult("Snapshot.Publish", rb.PubBSCount_ == 3 && delta
+                        && delta->BS_.Data_.Buys_[0].Pri_ == Pri2(10000) && bs.Buys_[0].Qty_ == 500);
+
+   // 新的一天: 委託簿清除, 五檔發行為空.
+   MoldPkBuilder pk3{"0000000002", 1};
+   pk3.SystemEvent('O');
+   rb.FeedPacket(pk3.Finish().data(), pk3.Finish().size());
+   rb.FlushBS();
+   fon9_CheckTestResult("NewDay.BS", rb.PubBSCount_ == 5 && bs.Buys_[0].Qty_ == 0 && bs.Sells_[0].Qty_ == 0
+                        && delta->BS_.Data_.Buys_[0].Qty_ == 0);
+   fon9_CheckTestResult("PhaseMap.Rts",
+                        f9set::ToTradingSessionSt(f9set::SetTradingPhase::Intermission) == f9fmkt_TradingSessionSt_Halted
+                        && f9set::ToTradingSessionSt(f9set::SetTradingPhase::PreClose) == f9fmkt_TradingSessionSt_PreClose
+                        && f9set::ToTradingSessionSt(f9set::SetTradingPhase::Unknown) == f9fmkt_TradingSessionSt_Unknown);
 }
 
 //--------------------------------------------------------------------------//
@@ -440,6 +646,10 @@ int main(int argc, char* argv[]) {
    TestMoldUdp64(tb);
    TestOrderBook(tb);
    TestSession(tb);
+   TestRecover();
+   TestSoupBinTcp();
+   TestSnapshot();
+   TestRtsBuilder();
 
    if (saveFile) {
       FILE* fd = fopen(saveFile, "wb");

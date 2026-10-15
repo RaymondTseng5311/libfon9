@@ -74,6 +74,8 @@ enum class ItchMsgType : char {
    OrderDelete = 'D',
    Trade = 'P',
    EquilibriumPriceUpdate = 'Z',
+   /// GLIMPSE 快照結束.
+   EndOfSnapshot = 'G',
 };
 
 /// 除了 Seconds 之外, 所有訊息都有 [MsgType + Nanoseconds] 開頭.
@@ -238,6 +240,14 @@ struct ItchEquilibriumPriceUpdate : public ItchMsgHead {
    ItchNum<uint64_t> BestAskQuantity_;
 };
 static_assert(sizeof(ItchEquilibriumPriceUpdate) == 53, "ItchEquilibriumPriceUpdate 沒有 pack?");
+
+/// 'G': GLIMPSE 快照結束; 只出現在 GLIMPSE(SoupBinTCP), 不會出現在 MoldUDP64.
+struct ItchEndOfSnapshot {
+   char           MsgType_;
+   /// 快照之後, 即時行情(MoldUDP64)要從這個序號開始處理; ASCII 數字.
+   ItchAlpha<20>  SeqNo_;
+};
+static_assert(sizeof(ItchEndOfSnapshot) == 21, "ItchEndOfSnapshot 沒有 pack?");
 
 fon9_PACK_POP;
 
